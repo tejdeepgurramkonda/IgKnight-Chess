@@ -1,0 +1,62 @@
+# Markdown Documentation Files (exclude all except README.md)
+*.md
+!README.md
+
+# Environment Files
+.env
+.env.local
+
+# Maven Build Output
+**/target/
+**/build/
+
+# IDE Files
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.settings/
+.project
+.classpath
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Compiled Class Files
+*.class
+
+# Log Files
+*.log
+logs/
+
+# Package Files
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Maven Wrapper
+**/.mvn/wrapper/maven-wrapper.jar
+
+# Environment Files
+.env
+.env.local
+
+# Spring Boot
+**/HELP.md
+
+# Temporary Files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.sqlite

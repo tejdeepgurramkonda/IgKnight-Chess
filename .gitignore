@@ -1,0 +1,34 @@
+# Markdown Documentation Files (exclude all except README.md)
+*.md
+!README.md
+
+# Environment Files
+.env
+
+# IDE Files
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# OS Files
+Thumbs.db
+.DS_Store
+
+# Log Files
+*.log
+logs/
+
+# Environment Files
+.env
+.env.local
+.env.*.local
+
+# Temporary Files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
