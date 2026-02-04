@@ -10,6 +10,7 @@ import com.igknight.game.dto.ChatHistoryResponse;
 import com.igknight.game.dto.ChatMessageDTO;
 import com.igknight.game.entity.ChatMessage;
 import com.igknight.game.entity.Game;
+import com.igknight.game.exception.ForbiddenException;
 import com.igknight.game.repository.ChatMessageRepository;
 import com.igknight.game.repository.GameRepository;
 
@@ -36,10 +37,15 @@ public class ChatService {
     }
 
     @Transactional(readOnly = true)
-    public ChatHistoryResponse getChatHistory(Long gameId) {
-        // Verify game exists
-        gameRepository.findById(gameId)
+    public ChatHistoryResponse getChatHistory(Long gameId, Long userId) {
+        // Verify game exists and load it
+        Game game = gameRepository.findById(gameId)
             .orElseThrow(() -> new RuntimeException("Game not found with id: " + gameId));
+
+        // AUTHORIZATION: Only players in the game can access chat history
+        if (!game.hasPlayer(userId)) {
+            throw new ForbiddenException("You are not a player in this game");
+        }
 
         List<ChatMessage> messages = chatMessageRepository.findByGameIdOrderByTimestamp(gameId);
         List<ChatMessageDTO> messageDTOs = messages.stream()

@@ -1,11 +1,16 @@
 package com.igknight.game.service;
 
-import com.igknight.game.engine.*;
-import com.igknight.game.engine.*;
-import org.springframework.stereotype.Service;
-
 import java.util.List;
 import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Service;
+
+import com.igknight.game.engine.Board;
+import com.igknight.game.engine.Color;
+import com.igknight.game.engine.Move;
+import com.igknight.game.engine.Piece;
+import com.igknight.game.engine.PieceType;
+import com.igknight.game.engine.Position;
 
 @Service
 public class MoveValidator {
@@ -224,7 +229,9 @@ public class MoveValidator {
                 }
             }
         } else {
-            for (int file = 3; file <= 4; file++) {
+            // Queenside: king moves from e-file (5) to c-file (3), passing through d-file (4) and c-file (3)
+            // FIDE rules require checking that d-file, c-file, AND b-file are not under attack
+            for (int file = 2; file <= 4; file++) {
                 Position square = new Position(rank, file);
                 if (moveGenerator.isSquareAttacked(board, square, color.opposite())) {
                     return false;

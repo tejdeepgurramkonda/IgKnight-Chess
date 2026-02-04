@@ -19,6 +19,7 @@ import com.igknight.game.dto.CreateGameRequest;
 import com.igknight.game.dto.GameResponse;
 import com.igknight.game.dto.LegalMovesResponse;
 import com.igknight.game.dto.MakeMoveRequest;
+import com.igknight.game.exception.ForbiddenException;
 import com.igknight.game.service.ChatService;
 import com.igknight.game.service.GameService;
 
@@ -55,8 +56,10 @@ public class GameController {
     }
 
     @GetMapping("/games/{gameId}")
-    public ResponseEntity<GameResponse> getGame(@PathVariable Long gameId) {
-        GameResponse game = gameService.getGame(gameId);
+    public ResponseEntity<GameResponse> getGame(
+            @PathVariable Long gameId,
+            @RequestHeader("X-User-Id") Long userId) {
+        GameResponse game = gameService.getGame(gameId, userId);
         return ResponseEntity.ok(game);
     }
 
@@ -84,8 +87,9 @@ public class GameController {
     @GetMapping("/games/{gameId}/legal-moves/{square}")
     public ResponseEntity<LegalMovesResponse> getLegalMoves(
             @PathVariable Long gameId,
-            @PathVariable String square) {
-        LegalMovesResponse legalMoves = gameService.getLegalMoves(gameId, square);
+            @PathVariable String square,
+            @RequestHeader("X-User-Id") Long userId) {
+        LegalMovesResponse legalMoves = gameService.getLegalMoves(gameId, square, userId);
         return ResponseEntity.ok(legalMoves);
     }
 
@@ -98,9 +102,16 @@ public class GameController {
     }
 
     @GetMapping("/games/{gameId}/chat")
-    public ResponseEntity<ChatHistoryResponse> getChatHistory(@PathVariable Long gameId) {
-        ChatHistoryResponse chatHistory = chatService.getChatHistory(gameId);
+    public ResponseEntity<ChatHistoryResponse> getChatHistory(
+            @PathVariable Long gameId,
+            @RequestHeader("X-User-Id") Long userId) {
+        ChatHistoryResponse chatHistory = chatService.getChatHistory(gameId, userId);
         return ResponseEntity.ok(chatHistory);
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<Map<String, String>> handleForbiddenException(ForbiddenException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
     }
 
     @ExceptionHandler(RuntimeException.class)

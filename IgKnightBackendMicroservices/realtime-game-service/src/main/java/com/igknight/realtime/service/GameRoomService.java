@@ -1,16 +1,16 @@
 package com.igknight.realtime.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
-
 import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Service to manage game rooms and WebSocket sessions
@@ -98,6 +98,7 @@ public class GameRoomService {
 
     /**
      * Broadcast a message to all sessions in a game room
+     * THREAD-SAFE: Synchronizes on each session to prevent concurrent writes
      * @param gameId The game ID
      * @param message The message to broadcast
      */
@@ -114,12 +115,15 @@ public class GameRoomService {
 
         for (WebSocketSession session : sessions) {
             if (session.isOpen()) {
-                try {
-                    session.sendMessage(textMessage);
-                    successCount++;
-                } catch (IOException e) {
-                    log.error("Failed to send message to session {}", session.getId(), e);
-                    failCount++;
+                // Synchronize on session to prevent concurrent writes
+                synchronized (session) {
+                    try {
+                        session.sendMessage(textMessage);
+                        successCount++;
+                    } catch (IOException e) {
+                        log.error("Failed to send message to session {}", session.getId(), e);
+                        failCount++;
+                    }
                 }
             } else {
                 failCount++;
@@ -131,15 +135,19 @@ public class GameRoomService {
 
     /**
      * Send a message to a specific session
+     * THREAD-SAFE: Synchronizes on session to prevent concurrent writes
      * @param session The WebSocket session
      * @param message The message to send
      */
     public void sendToSession(WebSocketSession session, String message) {
         if (session.isOpen()) {
-            try {
-                session.sendMessage(new TextMessage(message));
-            } catch (IOException e) {
-                log.error("Failed to send message to session {}", session.getId(), e);
+            // Synchronize on session to prevent concurrent writes
+            synchronized (session) {
+                try {
+                    session.sendMessage(new TextMessage(message));
+                } catch (IOException e) {
+                    log.error("Failed to send message to session {}", session.getId(), e);
+                }
             }
         }
     }

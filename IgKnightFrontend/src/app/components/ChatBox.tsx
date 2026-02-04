@@ -61,7 +61,7 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#141B2D]">
+    <div className="h-full max-h-[calc(100vh-80px)] flex flex-col bg-[#141B2D]">
       {/* Header */}
       <div className="p-3 border-b border-slate-800/50 flex-shrink-0">
         <div className="flex items-center gap-2 justify-between">

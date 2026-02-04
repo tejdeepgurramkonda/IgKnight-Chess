@@ -86,7 +86,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
         // Fetch current game state from Game Service
         try {
-            GameServiceResponse gameState = gameServiceClient.getGameState(gameId);
+            GameServiceResponse gameState = gameServiceClient.getGameState(gameId, userId);
 
             // Add session to game room
             gameRoomService.addSessionToGame(gameId, userId, session);
@@ -448,7 +448,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
      */
     private String determinePlayerColor(String gameId, String userId) {
         try {
-            GameServiceResponse gameState = gameServiceClient.getGameState(gameId);
+            GameServiceResponse gameState = gameServiceClient.getGameState(gameId, userId);
             if (gameState.getWhitePlayer() != null &&
                 userId.equals(String.valueOf(gameState.getWhitePlayer().getId()))) {
                 return "WHITE";

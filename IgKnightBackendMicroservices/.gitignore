@@ -2,9 +2,15 @@
 *.md
 !README.md
 
-# Environment Files
+# Environment Files - NEVER commit secrets!
 .env
 .env.local
+.env.*.local
+.env.development
+.env.production
+.env.staging
+.env.test
+!.env.template
 
 # Maven Build Output
 **/target/
@@ -60,3 +66,6 @@ logs/
 # Database
 *.db
 *.sqlite
+
+
+application-local.properties

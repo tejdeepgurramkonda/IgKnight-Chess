@@ -60,26 +60,32 @@ export function isGameStateMessage(message: WebSocketMessage): message is WebSoc
 }
 
 /**
- * Type guard for PLAYER_MOVE message
+ * Type guard for PLAYER_MOVE or MOVE_RESULT message
+ * Backend sends MOVE_RESULT after processing a move
  */
 export function isPlayerMoveMessage(message: WebSocketMessage): message is WebSocketMessage & {
   data: {
     from: string;
     to: string;
     promotion?: string;
-    piece: string;
+    piece?: string;
     captured?: string;
     san: string;
+    fen?: string;
+    nextTurn?: string;
+    isCheck?: boolean;
+    isCheckmate?: boolean;
+    isCapture?: boolean;
   };
 } {
-  if (message.type !== 'PLAYER_MOVE') return false;
+  // Accept both PLAYER_MOVE and MOVE_RESULT
+  if (message.type !== 'PLAYER_MOVE' && message.type !== 'MOVE_RESULT') return false;
   if (!message.data || typeof message.data !== 'object') return false;
   
   const data = message.data as any;
   return (
     typeof data.from === 'string' &&
     typeof data.to === 'string' &&
-    typeof data.piece === 'string' &&
     typeof data.san === 'string'
   );
 }

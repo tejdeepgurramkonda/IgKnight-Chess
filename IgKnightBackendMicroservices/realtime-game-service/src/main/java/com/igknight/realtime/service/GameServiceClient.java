@@ -1,15 +1,21 @@
 package com.igknight.realtime.service;
 
-import com.igknight.realtime.dto.GameServiceMoveRequest;
-import com.igknight.realtime.dto.GameServiceResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+
+import com.igknight.realtime.dto.GameServiceMoveRequest;
+import com.igknight.realtime.dto.GameServiceResponse;
 
 /**
  * Service to communicate with Game Service for move validation
@@ -82,19 +88,25 @@ public class GameServiceClient {
     /**
      * Get game state from Game Service
      * @param gameId The game ID
+     * @param userId The user ID requesting the game state (for authorization)
      * @return GameServiceResponse on success
      * @throws GameServiceException on failure
      */
-    public GameServiceResponse getGameState(String gameId) {
+    public GameServiceResponse getGameState(String gameId, String userId) {
         String url = gameServiceUrl + "/api/chess/games/" + gameId;
 
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-User-Id", userId);
+
+        HttpEntity<Void> entity = new HttpEntity<>(headers);
+
         try {
-            log.info("Fetching game state from Game Service: gameId={}", gameId);
+            log.info("Fetching game state from Game Service: gameId={}, userId={}", gameId, userId);
 
             ResponseEntity<GameServiceResponse> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
-                    null,
+                    entity,
                     GameServiceResponse.class
             );
 

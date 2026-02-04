@@ -26,6 +26,7 @@ import com.igknight.game.engine.PieceType;
 import com.igknight.game.engine.Position;
 import com.igknight.game.entity.Game;
 import com.igknight.game.entity.GameMove;
+import com.igknight.game.exception.ForbiddenException;
 import com.igknight.game.exception.ResourceAlreadyExistsException;
 import com.igknight.game.repository.GameMoveRepository;
 import com.igknight.game.repository.GameRepository;
@@ -301,9 +302,15 @@ public class GameService {
         return gameResponse;
     }
 
-    public GameResponse getGame(Long gameId) {
+    public GameResponse getGame(Long gameId, Long userId) {
         Game game = gameRepository.findById(gameId)
                 .orElseThrow(() -> new RuntimeException("Game not found"));
+        
+        // AUTHORIZATION: Only players in the game can access it
+        if (!game.hasPlayer(userId)) {
+            throw new ForbiddenException("You are not a player in this game");
+        }
+        
         return mapToGameResponse(game);
     }
 
@@ -322,9 +329,14 @@ public class GameService {
                 .collect(Collectors.toList());
     }
 
-    public LegalMovesResponse getLegalMoves(Long gameId, String square) {
+    public LegalMovesResponse getLegalMoves(Long gameId, String square, Long userId) {
         Game game = gameRepository.findById(gameId)
                 .orElseThrow(() -> new RuntimeException("Game not found"));
+
+        // AUTHORIZATION: Only players in the game can request legal moves
+        if (!game.hasPlayer(userId)) {
+            throw new ForbiddenException("You are not a player in this game");
+        }
 
         Board board = Board.fromFEN(game.getFenPosition());
         Position position = Position.fromAlgebraic(square);
@@ -342,8 +354,9 @@ public class GameService {
         Game game = gameRepository.findById(gameId)
                 .orElseThrow(() -> new RuntimeException("Game not found"));
 
+        // AUTHORIZATION: Only players in the game can resign
         if (!game.hasPlayer(userId)) {
-            throw new RuntimeException("You are not a player in this game");
+            throw new ForbiddenException("You are not a player in this game");
         }
 
         if (game.isGameOver()) {

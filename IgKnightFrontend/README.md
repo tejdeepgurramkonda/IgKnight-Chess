@@ -1,4 +1,4 @@
-# Chess Arena - Frontend UI Template
+# IgKnight - Frontend UI Template
 
 ## ⚠️ IMPORTANT: This is a Pure Frontend Demo
 

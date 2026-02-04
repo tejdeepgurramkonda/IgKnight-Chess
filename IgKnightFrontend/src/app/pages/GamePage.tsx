@@ -1,5 +1,4 @@
-import { Chess, Square } from 'chess.js';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ChessBoard } from '@/app/components/ChessBoard';
@@ -13,6 +12,8 @@ import { stompChatService } from '@/services/stompChatService';
 import { authService } from '@/services/authService';
 import { logger } from '@/services/logger';
 import type { GameResponse, MoveInfo } from '@/types/game';
+import type { Square, BoardPosition } from '@/types/chess';
+import { parseFenForDisplay } from '@/types/chess';
 import { Alert, AlertDescription } from '@/app/components/ui/alert';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import {
@@ -38,14 +39,29 @@ interface Move {
   moveNumber: number;
 }
 
+/**
+ * GamePage - BACKEND-DRIVEN CHESS CLIENT
+ * 
+ * ZERO CHESS LOGIC - Pure rendering and event handling
+ * Backend is the SOLE source of truth for:
+ * - Legal moves
+ * - Game state
+ * - Move validation
+ * - Check/checkmate detection
+ * - All chess rules
+ */
 export const GamePage = () => {
   const { gameId } = useParams<{ gameId?: string }>();
   const navigate = useNavigate();
   const currentUser = authService.getCurrentUser();
 
-  const [game, setGame] = useState<Chess | null>(null);
+  // Backend state (authoritative - NEVER modify locally)
   const [gameData, setGameData] = useState<GameResponse | null>(null);
+  const [legalMoves, setLegalMoves] = useState<Square[]>([]);
+  
+  // UI state (derived from backend)
   const [moveHistory, setMoveHistory] = useState<Move[]>([]);
+  const [lastMove, setLastMove] = useState<{ from: Square; to: Square } | null>(null);
   const [whiteCaptured, setWhiteCaptured] = useState<CapturedPiece[]>([]);
   const [blackCaptured, setBlackCaptured] = useState<CapturedPiece[]>([]);
   const [whiteTime, setWhiteTime] = useState<number | null>(null);
@@ -57,523 +73,55 @@ export const GamePage = () => {
   const [chatConnected, setChatConnected] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [messageIds, setMessageIds] = useState<Set<number>>(new Set());
+  const [showMoveHistory, setShowMoveHistory] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const lastClockTickRef = useRef<number | null>(null);
 
-  // CRITICAL: Track if moves are allowed based on game status
+  const normalizedTurn = (gameData?.currentTurn || '').toString().toUpperCase();
+  const isWhiteTurn = normalizedTurn.startsWith('W');
+  const isBlackTurn = normalizedTurn.startsWith('B');
+
+  // Local clock ticking between server updates
+  useEffect(() => {
+    if (!gameData || gameData.status !== 'IN_PROGRESS') {
+      lastClockTickRef.current = null;
+      return;
+    }
+
+    lastClockTickRef.current = Date.now();
+
+    const interval = setInterval(() => {
+      if (!lastClockTickRef.current) return;
+
+      const now = Date.now();
+      const deltaSeconds = Math.floor((now - lastClockTickRef.current) / 1000);
+      if (deltaSeconds <= 0) return;
+
+      lastClockTickRef.current = now;
+
+      if (isWhiteTurn) {
+        setWhiteTime((prev) => (prev !== null ? Math.max(0, prev - deltaSeconds) : prev));
+      }
+      if (isBlackTurn) {
+        setBlackTime((prev) => (prev !== null ? Math.max(0, prev - deltaSeconds) : prev));
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameData?.status, isWhiteTurn, isBlackTurn]);
+
+  // CRITICAL: Trust only backend for game rules
   const canMakeMove = gameData?.status === 'IN_PROGRESS';
 
-  // State reconciliation function
-  const reconcileGameState = useCallback(async () => {
-    logger.network('Reconciling game state after reconnect', { gameId });
-    try {
-      await loadGame();
-      logger.info('State reconciliation complete');
-    } catch (error) {
-      logger.error('State reconciliation failed', error);
-    }
-  }, [gameId]);
-
-  // Load game from backend
-  useEffect(() => {
-    if (!gameId) {
-      setError('No game ID provided');
-      setLoading(false);
-      return;
-    }
-
-    loadGame();
-  }, [gameId]);
-
-  const loadGame = async () => {
-    if (!gameId) return;
-
-    try {
-      setLoading(true);
-      setError('');
-      const data = await gameService.getGame(Number(gameId));
-      setGameData(data);
-
-      // Load FEN position
-      const chessInstance = new Chess(data.fenPosition);
-      setGame(chessInstance);
-
-      // Initialize clocks from backend data (already in seconds)
-      if (data.whiteTimeRemaining !== null) {
-        setWhiteTime(data.whiteTimeRemaining);
-      }
-      if (data.blackTimeRemaining !== null) {
-        setBlackTime(data.blackTimeRemaining);
-      }
-
-      // Update game state
-      setGameStatus(getGameStatusText(data));
-      
-      // Initialize move history from backend data (NOT chess.js history)
-      // Backend sends complete move list with SAN notation
-      if (data.moves && data.moves.length > 0) {
-        setMoveHistory(convertBackendMovesToUI(data.moves));
-      } else {
-        setMoveHistory([]);
-      }
-      updateCapturedPieces();
-      
-      // Load chat history
-      try {
-        const chatHistory = await gameService.getChatHistory(Number(gameId));
-        const historyMessages = chatHistory.messages.map(msg => ({
-          id: msg.id,
-          userId: msg.userId,
-          username: msg.username,
-          message: msg.message,
-          timestamp: msg.timestamp,
-        }));
-        setChatMessages(historyMessages);
-        
-        // Track message IDs for de-duplication
-        const ids = new Set(historyMessages.filter(m => m.id).map(m => m.id!));
-        setMessageIds(ids);
-      } catch (err) {
-        logger.error('Failed to load chat history', err);
-      }
-
-      // Clear loading state - data successfully loaded
-      setLoading(false);
-
-      // Register state reconciliation callback BEFORE connecting
-      wsService.setReconnectCallback(reconcileGameState);
-      
-      // Connect to WebSocket ONLY ONCE
-      if (!wsService.isConnected()) {
-        await wsService.connect(gameId);
-        setWsConnected(true);
-      }
-
-      // Subscribe to messages with DEFENSIVE HANDLING and TYPE GUARDS
-      wsService.onMessage((message) => {
-        logger.network('Received WS message', { type: message.type });
-
-        // Use type guards for safe message handling
-        if (isGameStartMessage(message)) {
-          logger.game('Game started', message.data);
-          setGameData(message.data);
-          setGame(new Chess(message.data.fenPosition));
-          setGameStatus(getGameStatusText(message.data));
-          return;
-        }
-
-        if (isGameUpdateMessage(message)) {
-          logger.game('Game state updated', message.data);
-          setGameData(message.data);
-          setGame(new Chess(message.data.fenPosition));
-          setGameStatus(getGameStatusText(message.data));
-          return;
-        }
-
-        if (isGameStateMessage(message)) {
-          logger.game('Game state received (resume/reconnect)', message.data);
-          setGameData(message.data);
-          setGame(new Chess(message.data.fenPosition));
-          
-          // Initialize clocks if present
-          if (message.data.whiteTimeRemaining !== null) {
-            setWhiteTime(message.data.whiteTimeRemaining);
-          }
-          if (message.data.blackTimeRemaining !== null) {
-            setBlackTime(message.data.blackTimeRemaining);
-          }
-          
-          setGameStatus(getGameStatusText(message.data));
-          setLoading(false); // CRITICAL: Clear loading state
-          updateMoveHistory();
-          updateCapturedPieces();
-          return;
-        }
-
-
-        if (isGameEndMessage(message)) {
-          logger.game('Game ended', message.data);
-          toast.info('Game Over', {
-            description: message.data.reason,
-          });
-          setGameStatus(`Game Over: ${message.data.reason}`);
-          loadGame(); // Reload to get final state
-          return;
-        }
-
-        if (isClockUpdateMessage(message)) {
-          // Backend sends time in milliseconds, convert to seconds
-          setWhiteTime(Math.floor(message.data.whiteTimeMs / 1000));
-          setBlackTime(Math.floor(message.data.blackTimeMs / 1000));
-          return;
-        }
-
-        if (isErrorMessage(message)) {
-          logger.error('WebSocket error', message.data.message);
-          setError(message.data.message);
-          return;
-        }
-
-        if (isTimeoutMessage(message)) {
-          logger.game('Game timeout', message.data);
-          toast.info('Game Over', {
-            description: `${message.data.winner} wins by timeout`,
-          });
-          setGameStatus(`Game Over: ${message.data.winner} wins by timeout`);
-          loadGame(); // Reload to get final state
-          return;
-        }
-
-        if (isMoveRejectedMessage(message)) {
-          logger.warn('Move rejected', message.data.reason);
-          toast.warning('Move Rejected', {
-            description: message.data.reason,
-          });
-          return;
-        }
-
-        // Handle legacy message types without type guards for backward compatibility
-        switch (message.type) {
-          case 'CONNECTED':
-            logger.network('Connected to game room', { gameId });
-            break;
-
-          case 'GAME_STATE':
-            // Backend sends full game state for resume/reconnect
-            // This is already handled by isGameStateMessage type guard above
-            // If we reach here, the type guard didn't catch it
-            logger.debug('GAME_STATE fallback handler', message.data);
-            if (message.data) {
-              // Backend sends 'fen' not 'fenPosition'
-              const fenString = message.data.fen || message.data.fenPosition || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-              setGame(new Chess(fenString));
-              
-              // Update game data if available
-              if (message.data.whiteTimeRemaining !== undefined) {
-                setWhiteTime(message.data.whiteTimeRemaining);
-              }
-              if (message.data.blackTimeRemaining !== undefined) {
-                setBlackTime(message.data.blackTimeRemaining);
-              }
-              
-              setGameStatus(message.data.status === 'IN_PROGRESS' ? "White's turn" : message.data.status);
-              setLoading(false);
-              updateMoveHistory();
-              updateCapturedPieces();
-              
-              // Load full game data to get player names and other info
-              loadGame();
-            }
-            break;
-
-          case 'USER_JOINED':
-            logger.network('User joined game', { userId: message.userId });
-            loadGame(); // Backend sends this when game state changes (join, resign, etc.)
-            break;
-
-          case 'USER_LEFT':
-            logger.network('User left game', { userId: message.userId });
-            // Optionally show a notification to the other player
-            break;
-
-          case 'PLAYER_MOVE':
-            // Backend sends opponent's move
-            if (message.data) {
-              handleMoveResult(message.data);
-            }
-            break;
-
-          case 'MOVE_RESULT':
-            logger.debug('MOVE_RESULT received', message);
-            if (message.data) {
-              handleMoveResult(message.data);
-            } else {
-              logger.error('MOVE_RESULT missing data', message);
-            }
-            break;
-
-          case 'MESSAGE':
-            // Generic broadcast message - check if it contains move data
-            logger.debug('MESSAGE received', { message, data: (message as any).data });
-            if ((message as any).data && (message as any).data.fen) {
-              // This is actually a move update
-              logger.debug('MESSAGE contains FEN, treating as move result');
-              handleMoveResult((message as any).data);
-            }
-            break;
-
-          case 'CHAT_MESSAGE':
-            logger.debug('Chat message received', message.data);
-            if (message.data) {
-              setChatMessages(prev => [...prev, {
-                id: message.data.id,
-                userId: message.data.userId,
-                username: message.data.username,
-                message: message.data.message,
-                timestamp: message.data.timestamp,
-              }]);
-            }
-            break;
-
-          case 'CLOCK_UPDATE':
-            // Clock updates handled separately - ignore to reduce noise
-            break;
-
-          case 'ERROR':
-            logger.error('WebSocket error', (message as any).message);
-            break;
-
-          default:
-            logger.warn('Unhandled message type', { type: message.type });
-        }
-      });
-    } catch (err: unknown) {
-      const error = err as { message?: string };
-      logger.error('Failed to load game', error);
-      setError(error.message || 'Failed to load game');
-      setLoading(false);
-      setWsConnected(false);
-    }
-  };
-
-  // Connect to STOMP chat when game loads
-  useEffect(() => {
-    if (!gameId) return;
-
-    let mounted = true;
-
-    const connectChat = async () => {
-      try {
-        await stompChatService.connect(gameId);
-        if (!mounted) return;
-        
-        setChatConnected(true);
-        logger.info('STOMP chat connected');
-
-        // Subscribe to chat messages (handler will persist until disconnect)
-        stompChatService.onMessage((chatMessage) => {
-          logger.debug('Chat message received from backend:', {
-            id: chatMessage.id,
-            userId: chatMessage.userId,
-            username: chatMessage.username,
-            message: chatMessage.message,
-          });
-          
-          // De-duplicate using functional setState to access current state
-          setChatMessages(prev => {
-            setMessageIds(currentIds => {
-              // Check if already exists
-              if (chatMessage.id && currentIds.has(chatMessage.id)) {
-                logger.debug('Duplicate chat message ignored:', chatMessage.id);
-                return currentIds;
-              }
-              
-              // Add new message ID
-              if (chatMessage.id) {
-                return new Set([...currentIds, chatMessage.id]);
-              }
-              return currentIds;
-            });
-            
-            // Only add if not duplicate (check again in case of race condition)
-            if (chatMessage.id) {
-              const exists = prev.some(m => m.id === chatMessage.id);
-              if (exists) return prev;
-            }
-            
-            return [...prev, chatMessage];
-          });
-        });
-
-        // Subscribe to connection status
-        stompChatService.onStatusChange((connected) => {
-          if (mounted) {
-            setChatConnected(connected);
-            logger.info('Chat connection status:', connected);
-          }
-        });
-      } catch (err) {
-        logger.error('Failed to connect to chat', err);
-        if (mounted) {
-          setChatConnected(false);
-        }
-      }
-    };
-
-    connectChat();
-
-    return () => {
-      mounted = false;
-      // Don't disconnect here - will be handled by global cleanup
-    };
-  }, [gameId]);
-
-  // Cleanup WebSocket and STOMP on unmount
-  useEffect(() => {
-    return () => {
-      wsService.disconnect();
-      stompChatService.disconnect();
-      logger.info('Disconnected from WebSocket and STOMP chat');
-    };
-  }, []);
-
-  // Handle WebSocket move result
-  const handleMoveResult = (data: any) => {
-    // DEFENSIVE: Validate data structure - accept both fen and fenAfterMove
-    const fen = data.fenAfterMove || data.fen;
-    if (!data || !fen) {
-      logger.error('Invalid MOVE_RESULT data', data);
-      return;
-    }
-
-    logger.game('Handling move result', data);
-    
-    const chessInstance = new Chess(fen);
-    setGame(chessInstance);
-    
-    // CRITICAL: Update ALL fields from WebSocket message (authoritative source)
-    // Backend sends currentTurn, status, times, etc. in the move payload
-    if (gameData) {
-      const updatedGameData = {
-        ...gameData,
-        fenPosition: fen,
-        currentTurn: data.currentTurn || (chessInstance.turn() === 'w' ? 'WHITE' : 'BLACK'),
-        status: data.status || gameData.status,
-        whiteTimeRemaining: data.whiteTimeRemaining ?? gameData.whiteTimeRemaining,
-        blackTimeRemaining: data.blackTimeRemaining ?? gameData.blackTimeRemaining,
-        moves: data.moves || gameData.moves,
-      };
-      setGameData(updatedGameData);
-      
-      // Update clocks from WebSocket data
-      if (data.whiteTimeRemaining !== undefined && data.whiteTimeRemaining !== null) {
-        setWhiteTime(data.whiteTimeRemaining);
-      }
-      if (data.blackTimeRemaining !== undefined && data.blackTimeRemaining !== null) {
-        setBlackTime(data.blackTimeRemaining);
-      }
-      
-      // Update move history from backend data (if provided)
-      if (data.moves && data.moves.length > 0) {
-        setMoveHistory(convertBackendMovesToUI(data.moves));
-      } else {
-        updateMoveHistory(); // Fallback to chess.js history
-      }
-    } else {
-      updateMoveHistory(); // Fallback if no gameData
-    }
-    updateCapturedPieces();
-    
-    // Update game status
-    if (data.isCheckmate) {
-      setGameStatus('Checkmate!');
-    } else if (data.isCheck) {
-      setGameStatus('Check!');
-    } else {
-      setGameStatus('');
-    }
-  };
-
-  // Handle game state update
-  const handleGameStateUpdate = (data: any) => {
-    // DEFENSIVE: Validate data structure
-    if (!data || !data.fen) {
-      logger.error('Invalid GAME_STATE data', data);
-      return;
-    }
-
-    const chessInstance = new Chess(data.fen);
-    setGame(chessInstance);
-    
-    // Update game data with new state
-    if (gameData) {
-      const updatedGameData = {
-        ...gameData,
-        fenPosition: data.fen,
-        currentTurn: data.currentTurn || (chessInstance.turn() === 'w' ? 'WHITE' : 'BLACK'),
-        status: data.status || gameData.status,
-        whiteTimeRemaining: data.whiteTimeRemaining ?? gameData.whiteTimeRemaining,
-        blackTimeRemaining: data.blackTimeRemaining ?? gameData.blackTimeRemaining,
-      };
-      setGameData(updatedGameData);
-      
-      // Update clocks
-      if (data.whiteTimeRemaining !== undefined && data.whiteTimeRemaining !== null) {
-        setWhiteTime(data.whiteTimeRemaining);
-      }
-      if (data.blackTimeRemaining !== undefined && data.blackTimeRemaining !== null) {
-        setBlackTime(data.blackTimeRemaining);
-      }
-    }
-    
-    updateMoveHistory();
-    updateCapturedPieces();
-  };
-
-  // Handle clock update
-  const handleClockUpdate = (data: any) => {
-    // DEFENSIVE: Validate required fields exist
-    if (!data || typeof data.whiteTimeMs !== 'number' || typeof data.blackTimeMs !== 'number') {
-      logger.error('Invalid CLOCK_UPDATE data', data);
-      return;
-    }
-
-    // Convert milliseconds to seconds
-    setWhiteTime(Math.floor(data.whiteTimeMs / 1000));
-    setBlackTime(Math.floor(data.blackTimeMs / 1000));
-  };
-
-  const formatTime = (seconds: number | null): string => {
-    if (seconds === null) return '--:--';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const calculateMaterialAdvantage = (color: 'w' | 'b'): number => {
-    if (!game) return 0;
-    
-    const pieceValues: Record<string, number> = {
-      p: 1,
-      n: 3,
-      b: 3,
-      r: 5,
-      q: 9,
-    };
-
-    const captured = color === 'w' ? blackCaptured : whiteCaptured;
-    const opponentCaptured = color === 'w' ? whiteCaptured : blackCaptured;
-
-    const ourMaterial = captured.reduce((sum, p) => sum + (pieceValues[p.type] || 0), 0);
-    const theirMaterial = opponentCaptured.reduce((sum, p) => sum + (pieceValues[p.type] || 0), 0);
-
-    return ourMaterial - theirMaterial;
-  };
-
-  const updateMoveHistory = useCallback(() => {
-    if (!game) {
-      setMoveHistory([]);
-      return;
-    }
-    
-    const history = game.history();
-    const moves: Move[] = [];
-
-    for (let i = 0; i < history.length; i += 2) {
-      moves.push({
-        moveNumber: Math.floor(i / 2) + 1,
-        white: history[i],
-        black: history[i + 1],
-      });
-    }
-
-    setMoveHistory(moves);
-  }, [game]);
-
-  const updateCapturedPieces = useCallback(() => {
-    if (!game) {
+  // Update captured pieces from FEN (display only)
+  const updateCapturedPieces = useCallback((fenPosition: string) => {
+    if (!fenPosition) {
       setWhiteCaptured([]);
       setBlackCaptured([]);
       return;
     }
+    
+    const boardPosition = parseFenForDisplay(fenPosition);
     
     const allPieces = {
       p: 8,
@@ -585,15 +133,11 @@ export const GamePage = () => {
 
     const boardPieces = { w: { p: 0, n: 0, b: 0, r: 0, q: 0 }, b: { p: 0, n: 0, b: 0, r: 0, q: 0 } };
 
-    for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        const square = String.fromCharCode(97 + j) + (8 - i) as Square;
-        const piece = game.get(square);
-        if (piece && piece.type !== 'k') {
-          boardPieces[piece.color][piece.type as keyof typeof boardPieces.w]++;
-        }
+    Object.values(boardPosition).forEach(piece => {
+      if (piece && piece.type !== 'k') {
+        boardPieces[piece.color][piece.type as keyof typeof boardPieces.w]++;
       }
-    }
+    });
 
     const whiteCap: CapturedPiece[] = [];
     const blackCap: CapturedPiece[] = [];
@@ -613,12 +157,569 @@ export const GamePage = () => {
 
     setWhiteCaptured(whiteCap);
     setBlackCaptured(blackCap);
-  }, [game]);
+  }, []);
 
+  // State reconciliation - fetch full state from backend
+  const reconcileGameState = useCallback(async () => {
+    logger.network('Reconciling game state after reconnect', { gameId });
+    try {
+      // Need to manually reload instead of calling loadGame to avoid circular dependency
+      if (!gameId) return;
+      
+      const data = await gameService.getGame(Number(gameId));
+      console.log('[DEBUG] reconcileGameState - Loaded game data:', data);
+      console.log('[DEBUG] reconcileGameState - FEN position:', data.fenPosition);
+      setGameData(data);
+
+      // Update clocks from backend
+      if (data.whiteTimeRemaining !== null) {
+        setWhiteTime(data.whiteTimeRemaining);
+      }
+      if (data.blackTimeRemaining !== null) {
+        setBlackTime(data.blackTimeRemaining);
+      }
+
+      // Update game state
+      setGameStatus(getGameStatusText(data));
+      
+      // Update move history from backend
+      if (data.moves && data.moves.length > 0) {
+        setMoveHistory(convertBackendMovesToUI(data.moves));
+        // Track last move for highlighting
+        if (data.moves.length >= 1) {
+          const lastBackendMove = data.moves[data.moves.length - 1];
+          setLastMove({
+            from: lastBackendMove.fromSquare || '',
+            to: lastBackendMove.toSquare || ''
+          });
+        }
+      } else {
+        setMoveHistory([]);
+        setLastMove(null);
+      }
+      
+      // Update captured pieces from FEN
+      updateCapturedPieces(data.fenPosition);
+      
+      logger.info('State reconciliation complete');
+    } catch (error) {
+      logger.error('State reconciliation failed', error);
+    }
+  }, [gameId]);
+
+  // Load game from backend (SINGLE SOURCE OF TRUTH)
+  useEffect(() => {
+    if (!gameId) {
+      setError('No game ID provided');
+      setLoading(false);
+      return;
+    }
+
+    loadGame();
+  }, [gameId]);
+
+  const loadGame = useCallback(async () => {
+    if (!gameId) return;
+
+    try {
+      setLoading(true);
+      setError('');
+      const data = await gameService.getGame(Number(gameId));
+      console.log('[DEBUG] loadGame - Received game data:', data);
+      console.log('[DEBUG] loadGame - FEN position:', data.fenPosition);
+      setGameData(data);
+
+      // Update clocks from backend
+      if (data.whiteTimeRemaining !== null) {
+        setWhiteTime(data.whiteTimeRemaining);
+      }
+      if (data.blackTimeRemaining !== null) {
+        setBlackTime(data.blackTimeRemaining);
+      }
+
+      // Update game state
+      setGameStatus(getGameStatusText(data));
+      
+      // Update move history from backend
+      if (data.moves && data.moves.length > 0) {
+        setMoveHistory(convertBackendMovesToUI(data.moves));
+        // Track last move for highlighting
+        if (data.moves.length >= 1) {
+          const lastBackendMove = data.moves[data.moves.length - 1];
+          setLastMove({
+            from: lastBackendMove.fromSquare || '',
+            to: lastBackendMove.toSquare || ''
+          });
+        }
+      } else {
+        setMoveHistory([]);
+        setLastMove(null);
+      }
+      updateCapturedPieces(data.fenPosition);
+      
+      // Load chat history
+      try {
+        const chatHistory = await gameService.getChatHistory(Number(gameId));
+        const historyMessages = chatHistory.messages.map(msg => ({
+          id: msg.id,
+          userId: msg.userId,
+          username: msg.username,
+          message: msg.message,
+          timestamp: msg.timestamp,
+        }));
+        setChatMessages(historyMessages);
+        
+        const ids = new Set(historyMessages.filter(m => m.id).map(m => m.id!));
+        setMessageIds(ids);
+      } catch (err) {
+        logger.error('Failed to load chat history', err);
+      }
+
+      setLoading(false);
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      logger.error('Failed to load game', error);
+      setError(error.message || 'Failed to load game');
+      setLoading(false);
+      setWsConnected(false);
+    }
+  }, [gameId, updateCapturedPieces]);
+
+  // Handle move result from backend (WebSocket update)
+  const handleMoveResult = useCallback((data: any) => {
+    // Handle different message formats from WebSocket
+    // MOVE_RESULT format: { from, to, fen, nextTurn, piece, san, isCheck, isCheckmate }
+    // REST response format: { fenPosition, currentTurn, status, moves, ... }
+    const fen = data.fen || data.fenAfterMove || data.fenPosition;
+    if (!data || !fen) {
+      logger.error('Invalid MOVE_RESULT data', data);
+      return;
+    }
+
+    logger.game('Handling move result', data);
+    console.log('[DEBUG] handleMoveResult - FEN received:', fen);
+    console.log('[DEBUG] handleMoveResult - Current gameData.fenPosition:', gameData?.fenPosition);
+    
+    // Update last move from WebSocket data (from MOVE_RESULT)
+    if (data.from && data.to) {
+      setLastMove({
+        from: data.from,
+        to: data.to
+      });
+    }
+    
+    // Update game data with backend response
+    if (gameData) {
+      const updatedGameData = {
+        ...gameData,
+        fenPosition: fen,
+        // Handle both 'nextTurn' (WebSocket) and 'currentTurn' (REST)
+        currentTurn: data.nextTurn || data.currentTurn || gameData.currentTurn,
+        status: data.status || gameData.status,
+        whiteTimeRemaining: data.whiteTimeRemaining ?? gameData.whiteTimeRemaining,
+        blackTimeRemaining: data.blackTimeRemaining ?? gameData.blackTimeRemaining,
+        moves: data.moves || gameData.moves,
+      };
+      setGameData(updatedGameData);
+      setGameStatus(getGameStatusText(updatedGameData));
+      console.log('[DEBUG] handleMoveResult - Updated gameData with FEN:', updatedGameData.fenPosition);
+      
+      if (data.whiteTimeRemaining !== undefined && data.whiteTimeRemaining !== null) {
+        setWhiteTime(data.whiteTimeRemaining);
+      }
+      if (data.blackTimeRemaining !== undefined && data.blackTimeRemaining !== null) {
+        setBlackTime(data.blackTimeRemaining);
+      }
+      
+      // Update move history if full moves array is provided (REST response)
+      if (data.moves && data.moves.length > 0) {
+        setMoveHistory(convertBackendMovesToUI(data.moves));
+        const lastBackendMove = data.moves[data.moves.length - 1];
+        setLastMove({
+          from: lastBackendMove.fromSquare || lastBackendMove.from || data.from || '',
+          to: lastBackendMove.toSquare || lastBackendMove.to || data.to || ''
+        });
+      } else if (data.san) {
+        // If we only have SAN notation (WebSocket MOVE_RESULT), append to existing history
+        // This prevents full page reload for better UX
+        setMoveHistory(prev => {
+          const newHistory = [...prev];
+          
+          // Determine whose turn it was (opposite of nextTurn, case-insensitive)
+          const nextTurnUpper = data.nextTurn?.toUpperCase();
+          const wasWhiteTurn = nextTurnUpper === 'BLACK';
+          
+          if (wasWhiteTurn) {
+            // White just moved, black is next
+            const lastMove = newHistory[newHistory.length - 1];
+            
+            if (!lastMove || lastMove.black !== undefined) {
+              // Need new move entry (either empty history or last move is complete)
+              newHistory.push({
+                moveNumber: newHistory.length + 1,
+                white: data.san
+              });
+            } else {
+              // Update existing move entry (has move number but no white move yet)
+              lastMove.white = data.san;
+            }
+          } else {
+            // Black just moved, white is next
+            const lastMove = newHistory[newHistory.length - 1];
+            
+            if (lastMove && lastMove.white !== undefined && lastMove.black === undefined) {
+              // Update current entry with black's move
+              lastMove.black = data.san;
+            } else {
+              // Create new entry (shouldn't happen, but handle it)
+              newHistory.push({
+                moveNumber: newHistory.length + 1,
+                black: data.san
+              });
+            }
+          }
+          
+          return newHistory;
+        });
+      }
+    }
+    updateCapturedPieces(fen);
+    
+    if (data.isCheckmate) {
+      setGameStatus('Checkmate!');
+    } else if (data.isCheck) {
+      setGameStatus('Check!');
+    } else {
+      setGameStatus('');
+    }
+  }, [gameData, updateCapturedPieces]);
+
+  // Connect to WebSocket and subscribe to game messages
+  useEffect(() => {
+    if (!gameId) return;
+
+    let mounted = true;
+    let unsubscribe: (() => void) | null = null;
+
+    const initWebSocket = async () => {
+      try {
+        // Register state reconciliation callback
+        wsService.setReconnectCallback(reconcileGameState);
+        
+        // Connect to WebSocket
+        if (!wsService.isConnected()) {
+          await wsService.connect(gameId);
+          if (!mounted) return;
+          setWsConnected(true);
+        }
+
+        // Subscribe to WebSocket messages (CRITICAL: Only subscribe ONCE)
+        unsubscribe = wsService.onMessage((message) => {
+          logger.network('Received WS message', { type: message.type });
+
+          // Fallback: if message carries a fen update, sync board immediately
+          if ((message as any)?.data?.fen || (message as any)?.data?.fenPosition) {
+            handleMoveResult((message as any).data);
+            const statusSource = (message as any).data?.status;
+            if (statusSource) {
+              setGameStatus(getGameStatusText({ ...gameData, status: statusSource }));
+            }
+          }
+
+          if (isGameStartMessage(message)) {
+            logger.game('Game started', message.data);
+            setGameData(message.data);
+            setGameStatus(getGameStatusText(message.data));
+            return;
+          }
+
+          if (isGameUpdateMessage(message)) {
+            logger.game('Game state updated', message.data);
+            setGameData(message.data);
+            setGameStatus(getGameStatusText(message.data));
+            return;
+          }
+
+          if (isGameStateMessage(message)) {
+            logger.game('Game state received (resume/reconnect)', message.data);
+            setGameData(message.data);
+            
+            if (message.data.whiteTimeRemaining !== null) {
+              setWhiteTime(message.data.whiteTimeRemaining);
+            }
+            if (message.data.blackTimeRemaining !== null) {
+              setBlackTime(message.data.blackTimeRemaining);
+            }
+            
+            setGameStatus(getGameStatusText(message.data));
+            setLoading(false);
+            
+            if (message.data.moves && message.data.moves.length > 0) {
+              setMoveHistory(convertBackendMovesToUI(message.data.moves));
+            }
+            updateCapturedPieces(message.data.fenPosition);
+            return;
+          }
+
+          if (isGameEndMessage(message)) {
+            logger.game('Game ended', message.data);
+            toast.info('Game Over', {
+              description: message.data.reason,
+            });
+            setGameStatus(`Game Over: ${message.data.reason}`);
+            loadGame();
+            return;
+          }
+
+          if (isPlayerMoveMessage(message)) {
+            logger.game('Player move received (PLAYER_MOVE or MOVE_RESULT)', message.data);
+            // Update game state from move result
+            if (message.data) {
+              handleMoveResult(message.data);
+            }
+            // No need to reload - handleMoveResult already updates all state
+            return;
+          }
+
+          if (isClockUpdateMessage(message)) {
+            // Backend sends time in milliseconds, convert to seconds
+            const whiteSeconds = Math.floor(message.data.whiteTimeMs / 1000);
+            const blackSeconds = Math.floor(message.data.blackTimeMs / 1000);
+            setWhiteTime(whiteSeconds);
+            setBlackTime(blackSeconds);
+            lastClockTickRef.current = Date.now();
+            logger.debug('Clock updated', { white: whiteSeconds, black: blackSeconds });
+            return;
+          }
+
+          if (isErrorMessage(message)) {
+            logger.error('WebSocket error', message.data.message);
+            setError(message.data.message);
+            return;
+          }
+
+          if (isTimeoutMessage(message)) {
+            logger.game('Game timeout', message.data);
+            toast.info('Game Over', {
+              description: `${message.data.winner} wins by timeout`,
+            });
+            setGameStatus(`Game Over: ${message.data.winner} wins by timeout`);
+            loadGame();
+            return;
+          }
+
+          if (isMoveRejectedMessage(message)) {
+            logger.warn('Move rejected', message.data.reason);
+            toast.warning('Move Rejected', {
+              description: message.data.reason,
+            });
+            return;
+          }
+
+          // Legacy message handlers
+          switch (message.type) {
+            case 'CONNECTED':
+              logger.network('Connected to game room', { gameId });
+              break;
+
+            case 'GAME_STATE':
+              if (message.data) {
+                setGameData(message.data);
+                
+                if (message.data.whiteTimeRemaining !== undefined) {
+                  setWhiteTime(message.data.whiteTimeRemaining);
+                }
+                if (message.data.blackTimeRemaining !== undefined) {
+                  setBlackTime(message.data.blackTimeRemaining);
+                }
+                
+                setGameStatus(message.data.status === 'IN_PROGRESS' ? "In Progress" : message.data.status);
+                setLoading(false);
+                
+                if (message.data.moves && message.data.moves.length > 0) {
+                  setMoveHistory(convertBackendMovesToUI(message.data.moves));
+                }
+                updateCapturedPieces(message.data.fenPosition);
+                loadGame();
+              }
+              break;
+
+            case 'USER_JOINED':
+              logger.network('User joined game', { userId: message.userId });
+              loadGame();
+              break;
+
+            case 'USER_LEFT':
+              logger.network('User left game', { userId: message.userId });
+              break;
+
+            case 'PLAYER_MOVE':
+            case 'MOVE_RESULT':
+              if (message.data) {
+                handleMoveResult(message.data);
+              }
+              break;
+
+            case 'MOVE':
+              if ((message as any).data) {
+                handleMoveResult((message as any).data);
+              }
+              break;
+
+            case 'MESSAGE':
+              logger.debug('MESSAGE received', { message });
+              if ((message as any).data && (message as any).data.fenPosition) {
+                handleMoveResult((message as any).data);
+              }
+              break;
+
+            case 'CHAT_MESSAGE':
+              if (message.data) {
+                setChatMessages(prev => [...prev, {
+                  id: message.data.id,
+                  userId: message.data.userId,
+                  username: message.data.username,
+                  message: message.data.message,
+                  timestamp: message.data.timestamp,
+                }]);
+              }
+              break;
+
+            default:
+              logger.warn('Unhandled message type', { type: message.type });
+          }
+        });
+      } catch (err) {
+        logger.error('Failed to connect WebSocket', err);
+        if (mounted) {
+          setWsConnected(false);
+        }
+      }
+    };
+
+    initWebSocket();
+
+    return () => {
+      mounted = false;
+      // CRITICAL: Unsubscribe from message handler to prevent duplicates
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [gameId]);
+
+  // Connect to STOMP chat
+  useEffect(() => {
+    if (!gameId) return;
+
+    let mounted = true;
+
+    const connectChat = async () => {
+      try {
+        await stompChatService.connect(gameId);
+        if (!mounted) return;
+        
+        setChatConnected(true);
+        logger.info('STOMP chat connected');
+
+        stompChatService.onMessage((chatMessage) => {
+          setChatMessages(prev => {
+            setMessageIds(currentIds => {
+              if (chatMessage.id && currentIds.has(chatMessage.id)) {
+                logger.debug('Duplicate chat message ignored:', chatMessage.id);
+                return currentIds;
+              }
+              
+              if (chatMessage.id) {
+                return new Set([...currentIds, chatMessage.id]);
+              }
+              return currentIds;
+            });
+            
+            if (chatMessage.id) {
+              const exists = prev.some(m => m.id === chatMessage.id);
+              if (exists) return prev;
+            }
+            
+            return [...prev, chatMessage];
+          });
+        });
+
+        stompChatService.onStatusChange((connected) => {
+          if (mounted) {
+            setChatConnected(connected);
+          }
+        });
+      } catch (err) {
+        logger.error('Failed to connect to chat', err);
+        if (mounted) {
+          setChatConnected(false);
+        }
+      }
+    };
+
+    connectChat();
+
+    return () => {
+      mounted = false;
+    };
+  }, [gameId]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      wsService.disconnect();
+      stompChatService.disconnect();
+      logger.info('Disconnected from WebSocket and STOMP chat');
+    };
+  }, []);
+
+  // Format time display
+  const formatTime = (seconds: number | null): string => {
+    if (seconds === null) return '--:--';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Calculate material advantage for display
+  const calculateMaterialAdvantage = (color: 'w' | 'b'): number => {
+    const pieceValues: Record<string, number> = {
+      p: 1,
+      n: 3,
+      b: 3,
+      r: 5,
+      q: 9,
+    };
+
+    const captured = color === 'w' ? blackCaptured : whiteCaptured;
+    const opponentCaptured = color === 'w' ? whiteCaptured : blackCaptured;
+
+    const ourMaterial = captured.reduce((sum, p) => sum + (pieceValues[p.type] || 0), 0);
+    const theirMaterial = opponentCaptured.reduce((sum, p) => sum + (pieceValues[p.type] || 0), 0);
+
+    return ourMaterial - theirMaterial;
+  };
+
+  // Handle square selection - fetch legal moves from backend
+  const handleSquareSelect = async (square: Square) => {
+    if (!gameId || !gameData) return;
+
+    try {
+      const response = await gameService.getLegalMoves(Number(gameId), square);
+      setLegalMoves(response.legalMoves || []);
+      logger.debug('Legal moves fetched from backend', { square, moves: response.legalMoves });
+    } catch (error) {
+      logger.error('Failed to fetch legal moves', error);
+      setLegalMoves([]);
+    }
+  };
+
+  // Handle move - send to backend for validation
   const handleMove = async (from: Square, to: Square) => {
-    if (!gameId || !gameData || !game) return;
+    if (!gameId || !gameData) return;
 
-    // CRITICAL GUARD: Only allow moves when game status is IN_PROGRESS
+    // CRITICAL: Only allow moves when game is IN_PROGRESS
     if (gameData.status !== 'IN_PROGRESS') {
       toast.warning('Cannot Move', {
         description: 'Game has not started or is already finished',
@@ -626,7 +727,6 @@ export const GamePage = () => {
       return;
     }
 
-    // Check if it's the current user's turn
     const userColor = getUserColor();
     if (!userColor) {
       toast.warning('Cannot Move', {
@@ -635,8 +735,6 @@ export const GamePage = () => {
       return;
     }
 
-    // Backend uses 'WHITE'/'BLACK', chess.js uses 'w'/'b'
-    const currentTurn = game.turn();
     const isWhiteTurn = gameData.currentTurn === 'WHITE';
     const isUserTurn = (userColor === 'white' && isWhiteTurn) || (userColor === 'black' && !isWhiteTurn);
 
@@ -648,66 +746,53 @@ export const GamePage = () => {
     }
 
     try {
-      // Check if this is a pawn promotion move
-      const piece = game.get(from);
+      // Check for pawn promotion
+      const boardPosition = parseFenForDisplay(gameData.fenPosition);
+      const piece = boardPosition[from];
       const isPawnPromotion = piece && 
                               piece.type === 'p' && 
                               ((piece.color === 'w' && to[1] === '8') || 
                                (piece.color === 'b' && to[1] === '1'));
       
-      // Send move via REST API for persistence and validation
-      // Backend will validate the move and broadcast via WebSocket
       const moveRequest: any = { from, to };
       
-      // Only include promotion for actual pawn promotions
       if (isPawnPromotion) {
-        moveRequest.promotion = 'Q';  // Uppercase Q for backend
+        moveRequest.promotion = 'Q';
       }
       
-      // Send move and immediately update board with response (prevents flicker)
+      // Send move to backend - it will validate and update
       const response = await gameService.makeMove(Number(gameId), moveRequest);
       
-      // IMMEDIATELY update board with REST response - no waiting for WebSocket
-      const chessInstance = new Chess(response.fenPosition);
-      setGame(chessInstance);
-      
-      // CRITICAL: Use currentTurn from backend response (authoritative source)
-      // Backend has already calculated and saved the correct turn after the move
+      // Update state with backend response (authoritative)
       setGameData(response);
       setGameStatus(getGameStatusText(response));
       
-      // Update move history from backend response (authoritative source)
       if (response.moves && response.moves.length > 0) {
         setMoveHistory(convertBackendMovesToUI(response.moves));
-      } else {
-        // Fallback to chess.js history if backend doesn't send moves
-        const history = chessInstance.history();
-        const moves: Move[] = [];
-        for (let i = 0; i < history.length; i += 2) {
-          moves.push({
-            moveNumber: Math.floor(i / 2) + 1,
-            white: history[i],
-            black: history[i + 1],
-          });
-        }
-        setMoveHistory(moves);
+        const lastBackendMove = response.moves[response.moves.length - 1];
+        setLastMove({
+          from: lastBackendMove.fromSquare || from,
+          to: lastBackendMove.toSquare || to
+        });
       }
-      updateCapturedPieces();
+      updateCapturedPieces(response.fenPosition);
       
-      // WebSocket will also send update, but state is already correct (idempotent)
+      // Clear legal moves after move
+      setLegalMoves([]);
     } catch (error: unknown) {
       const err = error as { message?: string };
       logger.error('Move failed', err);
       toast.error('Invalid Move', {
         description: err.message || 'This move is not allowed',
       });
+      // Clear legal moves on error
+      setLegalMoves([]);
     }
   };
 
   const handleResign = async () => {
     if (!gameId) return;
 
-    // Use toast promise for confirmation-like experience
     const confirmed = window.confirm('Are you sure you want to resign?');
     if (!confirmed) return;
 
@@ -721,12 +806,9 @@ export const GamePage = () => {
         }
       );
       
-      // Update game state immediately with resignation result
       if (result) {
         setGameData(result);
         setGameStatus(getGameStatusText(result));
-        
-        // Reload the game to get the final state
         await loadGame();
       }
     } catch (error) {
@@ -735,9 +817,7 @@ export const GamePage = () => {
   };
 
   const handleSendChatMessage = (message: string) => {
-    if (!message.trim()) {
-      return;
-    }
+    if (!message.trim()) return;
 
     if (!chatConnected) {
       toast.error('Chat not connected', {
@@ -759,13 +839,11 @@ export const GamePage = () => {
 
   const getUserColor = (): 'white' | 'black' | null => {
     if (!gameData || !currentUser) return null;
-    // CRITICAL: Backend uses whitePlayer/blackPlayer objects with id property
     if (gameData.whitePlayer?.id === currentUser.id) return 'white';
     if (gameData.blackPlayer?.id === currentUser.id) return 'black';
     return null;
   };
 
-  // Convert backend MoveInfo array to UI Move format for MoveHistory component
   const convertBackendMovesToUI = (backendMoves: MoveInfo[]): Move[] => {
     const moves: Move[] = [];
     for (let i = 0; i < backendMoves.length; i += 2) {
@@ -790,7 +868,6 @@ export const GamePage = () => {
     if (data.status === 'DRAW_FIFTY_MOVE') return 'Draw by fifty-move rule';
     if (data.status === 'DRAW_INSUFFICIENT_MATERIAL') return 'Draw by insufficient material';
     if (data.status === 'RESIGNATION') {
-      // Check if current user is the winner
       if (data.winnerId === currentUser?.id) {
         return 'Opponent resigned - You won!';
       } else {
@@ -801,7 +878,6 @@ export const GamePage = () => {
       return data.winnerId === currentUser?.id ? 'Opponent ran out of time - You won!' : 'You ran out of time - Game over';
     }
     if (data.status === 'WAITING') return 'Waiting for opponent...';
-    if (game && game.isCheck()) return 'Check!';
     return '';
   };
 
@@ -851,12 +927,11 @@ export const GamePage = () => {
   const waitingForOpponent = gameData.status === 'WAITING' || !gameData.whitePlayer || !gameData.blackPlayer;
 
   return (
-    <div className="min-h-screen bg-[#0B1020] flex flex-col">
-      {/* ========== TOP STATUS BAR ========== */}
+    <div className="flex-1 bg-[#0B1020] flex flex-col overflow-hidden">
+      {/* TOP STATUS BAR */}
       <div className="bg-[#141B2D] border-b border-slate-800/50 flex-shrink-0">
-        <div className="px-6 py-2">
+        <div className="px-5 py-1">
           <div className="flex items-center justify-between text-sm">
-            {/* Live Status */}
             <div className="flex items-center gap-4">
               {wsConnected ? (
                 <div className="flex items-center gap-2">
@@ -873,10 +948,8 @@ export const GamePage = () => {
               <span className="text-slate-400 font-mono">Game #{gameId}</span>
             </div>
 
-            {/* Match Type */}
             <div className="text-slate-200 font-bold">Ranked • 10+0</div>
 
-            {/* Clocks */}
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 text-xs font-medium">WHITE</span>
@@ -891,7 +964,6 @@ export const GamePage = () => {
           </div>
         </div>
 
-        {/* Waiting Banner */}
         {waitingForOpponent && (
           <div className="bg-yellow-500/10 border-t border-yellow-500/20 py-1.5">
             <p className="text-yellow-400 text-center text-sm font-semibold">⏳ Waiting for opponent...</p>
@@ -899,18 +971,83 @@ export const GamePage = () => {
         )}
       </div>
 
-      {/* ========== MAIN ARENA (3-Column Layout) ========== */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* MAIN ARENA */}
+      <div className="flex-1 flex overflow-hidden relative">
+        
+        {/* Mobile Move History Overlay */}
+        {showMoveHistory && (
+          <div className="lg:hidden absolute inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowMoveHistory(false)}>
+            <div className="absolute left-0 top-0 bottom-0 w-[260px] bg-[#141B2D] border-r border-slate-800/50 shadow-2xl p-2" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-3 border-b border-slate-700">
+                <h3 className="text-white font-semibold">Move History</h3>
+                <button onClick={() => setShowMoveHistory(false)} className="text-slate-400 hover:text-white">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <MoveHistory moves={moveHistory} currentMove={moveHistory.length} />
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Chat Overlay */}
+        {showChat && (
+          <div className="xl:hidden absolute inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setShowChat(false)}>
+            <div className="absolute right-0 top-0 bottom-0 w-[260px] bg-[#141B2D] border-l border-slate-800/50 shadow-2xl p-2" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-3 border-b border-slate-700">
+                <h3 className="text-white font-semibold">Chat</h3>
+                <button onClick={() => setShowChat(false)} className="text-slate-400 hover:text-white">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="h-[calc(100%-60px)]">
+                <ChatBox
+                  messages={chatMessages}
+                  currentUserId={currentUser?.id || 0}
+                  onSendMessage={handleSendChatMessage}
+                  disabled={!chatConnected || !canMakeMove}
+                  chatConnected={chatConnected}
+                />
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* LEFT: Move History */}
-        <div className="w-[280px] bg-[#141B2D] border-r border-slate-800/50 flex-shrink-0">
+        <div className="hidden lg:block w-[280px] max-h-[calc(100vh-80px)] bg-[#141B2D] border-r border-slate-800/50 flex-shrink-0 p-2 mt-2">
           <MoveHistory moves={moveHistory} currentMove={moveHistory.length} />
         </div>
 
         {/* CENTER: Board Zone */}
-        <div className="flex-1 flex flex-col items-center justify-center py-6 px-8 overflow-y-auto">
-          {/* Top Player (Opponent) - Always shows opponent */}
-          <div className="w-[640px] mb-2">
+        <div className="flex-1 flex flex-col items-center py-2 px-3 overflow-y-auto" style={{ minHeight: 0 }}>
+          
+          {/* Mobile Toggle Buttons */}
+          <div className="w-full max-w-[min(90vw,700px)] flex gap-2 mb-2 lg:hidden">
+            <button
+              onClick={() => setShowMoveHistory(true)}
+              className="flex-1 bg-slate-700/50 hover:bg-slate-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Moves ({moveHistory.length})
+            </button>
+            <button
+              onClick={() => setShowChat(true)}
+              className="xl:hidden flex-1 bg-slate-700/50 hover:bg-slate-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              Chat {chatMessages.length > 0 && `(${chatMessages.length})`}
+            </button>
+          </div>
+
+          {/* Top Player (Opponent) */}
+          <div className="w-full max-w-[min(90vw,700px)] mb-2">
             {userColor === 'white' ? (
               <PlayerInfo
                 name={gameData.blackPlayer?.username || 'Opponent'}
@@ -918,7 +1055,7 @@ export const GamePage = () => {
                 timeRemaining={formatTime(blackTime)}
                 capturedPieces={blackCaptured}
                 materialAdvantage={calculateMaterialAdvantage('b')}
-                isActive={gameData.currentTurn === 'BLACK'}
+                isActive={isBlackTurn}
                 isCurrentUser={false}
               />
             ) : (
@@ -928,25 +1065,41 @@ export const GamePage = () => {
                 timeRemaining={formatTime(whiteTime)}
                 capturedPieces={whiteCaptured}
                 materialAdvantage={calculateMaterialAdvantage('w')}
-                isActive={gameData.currentTurn === 'WHITE'}
+                isActive={isWhiteTurn}
                 isCurrentUser={false}
               />
             )}
           </div>
 
-          {/* Chessboard - HERO */}
-          <div className="w-[640px] h-[640px] mb-2 shadow-2xl shadow-blue-500/5">
+          {/* Chessboard */}
+          <div
+            className="w-full max-w-[820px] mb-2 shadow-2xl shadow-blue-500/5"
+            style={{
+              aspectRatio: '1 / 1',
+              width: 'min(clamp(340px, 78vw, 820px), calc(100vh - 300px))',
+              height: 'min(clamp(340px, 78vw, 820px), calc(100vh - 300px))',
+              minHeight: '330px',
+            }}
+          >
+            {(() => {
+              console.log('[GamePage] Rendering ChessBoard with FEN:', gameData?.fenPosition);
+              return null;
+            })()}
             <ChessBoard
-              game={game}
+              fenPosition={gameData?.fenPosition || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'}
               onMove={handleMove}
               disabled={!canMakeMove || !userColor || waitingForOpponent}
               flipped={userColor === 'black'}
               userColor={userColor}
+              currentTurn={gameData?.currentTurn}
+              onSquareSelect={handleSquareSelect}
+              legalMoves={legalMoves}
+              lastMove={lastMove}
             />
           </div>
 
-          {/* Bottom Player (You) - Always shows current user */}
-          <div className="w-[640px] mb-3">
+          {/* Bottom Player (You) */}
+          <div className="w-full max-w-[min(90vw,700px)] mb-1">
             {userColor === 'white' ? (
               <PlayerInfo
                 name={gameData.whitePlayer?.username || currentUser?.username || 'You'}
@@ -954,7 +1107,7 @@ export const GamePage = () => {
                 timeRemaining={formatTime(whiteTime)}
                 capturedPieces={whiteCaptured}
                 materialAdvantage={calculateMaterialAdvantage('w')}
-                isActive={gameData.currentTurn === 'WHITE'}
+                isActive={isWhiteTurn}
                 isCurrentUser={true}
               />
             ) : (
@@ -964,14 +1117,14 @@ export const GamePage = () => {
                 timeRemaining={formatTime(blackTime)}
                 capturedPieces={blackCaptured}
                 materialAdvantage={calculateMaterialAdvantage('b')}
-                isActive={gameData.currentTurn === 'BLACK'}
+                isActive={isBlackTurn}
                 isCurrentUser={true}
               />
             )}
           </div>
 
           {/* Game Status + Controls */}
-          <div className="w-[640px] flex gap-3">
+          <div className="w-full max-w-[min(90vw,700px)] flex gap-3">
             {gameStatus && (
               <div className="flex-1 bg-blue-500/10 border border-blue-500/30 rounded-lg px-4 py-2 flex items-center justify-center">
                 <span className="text-blue-300 font-bold text-sm">{gameStatus}</span>
@@ -991,7 +1144,7 @@ export const GamePage = () => {
         </div>
 
         {/* RIGHT: Chat */}
-        <div className="w-[280px] bg-[#141B2D] border-l border-slate-800/50 flex-shrink-0">
+        <div className="hidden xl:block w-[280px] max-h-[calc(100vh-80px)] bg-[#141B2D] border-l border-slate-800/50 flex-shrink-0 p-2 mt-2">
           <ChatBox
             messages={chatMessages}
             currentUserId={currentUser?.id || 0}

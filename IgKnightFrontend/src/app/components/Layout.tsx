@@ -55,7 +55,7 @@ export const Layout: React.FC = () => {
               <Crown className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">Chess Arena</h1>
+              <h1 className="text-xl font-bold text-white">IgKnight</h1>
               <p className="text-xs text-slate-400">Master the game</p>
             </div>
           </div>
@@ -120,7 +120,7 @@ export const Layout: React.FC = () => {
             <div className="p-2 bg-blue-600 rounded-lg">
               <Crown className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-lg font-bold text-white">Chess Arena</h1>
+            <h1 className="text-lg font-bold text-white">IgKnight</h1>
           </div>
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -172,7 +172,7 @@ export const Layout: React.FC = () => {
 
       {/* Main Content */}
       <main id="main-content" className="flex-1 overflow-auto">
-        <div className="lg:p-8 p-4 pt-20 lg:pt-8">
+        <div className={location.pathname.startsWith('/play/') ? 'p-3' : 'lg:p-8 p-4 pt-20 lg:pt-8'}>
           <Outlet />
         </div>
       </main>

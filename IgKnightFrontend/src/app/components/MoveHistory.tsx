@@ -14,7 +14,7 @@ interface MoveHistoryProps {
 
 export const MoveHistory: React.FC<MoveHistoryProps> = ({ moves }) => {
   return (
-    <div className="h-full flex flex-col bg-[#141B2D]">
+    <div className="h-full max-h-[calc(100vh-80px)] flex flex-col bg-[#141B2D]">
       {/* Header - Chess Scoresheet Style */}
       <div className="p-3 border-b border-slate-800/50 flex-shrink-0">
         <div className="flex items-center gap-2">

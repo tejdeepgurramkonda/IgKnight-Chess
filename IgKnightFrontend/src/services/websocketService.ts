@@ -71,8 +71,18 @@ export class GameWebSocketService {
       this.isConnecting = true;
       this.isIntentionalDisconnect = false;
 
+      // Get JWT token for authentication
+      const token = tokenStorage.getToken();
+      if (!token) {
+        reject(new Error('No authentication token available'));
+        this.isConnecting = false;
+        return;
+      }
+
       // Build WebSocket URL with query parameters
-      const wsUrl = `${ENV.WS_BASE_URL}/ws/game?gameId=${gameId}&userId=${user.id}`;
+      // SECURITY: Include JWT token for backend authentication
+      // Backend requires: gameId, userId, and token query parameters
+      const wsUrl = `${ENV.WS_BASE_URL}/ws/game?gameId=${gameId}&userId=${this.userId}&token=${encodeURIComponent(token)}`;
 
       try {
         this.ws = new WebSocket(wsUrl);
@@ -227,14 +237,22 @@ this.stopHeartbeat();
       return;
     }
 
-    // Handle PONG responses for heartbeat
+    // Handle PONG responses for heartbeat (if backend implements it in the future)
     if (message.type === 'PONG') {
       this.lastPongReceived = Date.now();
       return; // Don't notify handlers of heartbeat messages
     }
 
-    // Log all messages for debugging
-    console.log('[WS] Received:', message.type, message);
+    // Log all messages for debugging with full details
+    if (message.type === 'ERROR') {
+      console.error('[WS] ERROR:', JSON.stringify(message, null, 2));
+    } else if (message.type === 'CLOCK_UPDATE' || message.type === 'MOVE_RESULT') {
+      // Compact logging for frequent messages
+      console.log(`[WS] Received: ${message.type}`, message.data);
+    } else {
+      // Full logging for other messages
+      console.log(`[WS] Received: ${message.type}`, message);
+    }
 
     // Notify all handlers
     this.messageHandlers.forEach((handler) => {
@@ -284,6 +302,12 @@ this.stopHeartbeat();
    * Start heartbeat mechanism to detect silent disconnections
    */
   private startHeartbeat(): void {
+    // DISABLED: Backend doesn't implement PING/PONG responses yet
+    // WebSocket connection stability is handled by browser's built-in mechanisms
+    // and explicit reconnection logic on disconnect events
+    return;
+    
+    /* 
     this.stopHeartbeat();
     
     this.heartbeatInterval = setInterval(() => {
@@ -301,6 +325,7 @@ this.stopHeartbeat();
         this.sendMessage({ type: 'PING' });
       }
     }, this.HEARTBEAT_INTERVAL);
+    */
   }
 
   /**

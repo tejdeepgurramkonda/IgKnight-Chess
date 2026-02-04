@@ -3,6 +3,7 @@ package com.igknight.game.websocket;
 import java.security.Principal;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -16,9 +17,16 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+/**
+ * WebSocket configuration for STOMP chat service
+ * CORS origins are configurable via environment variable for production deployment
+ */
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Value("${cors.allowed.origins}")
+    private String allowedOrigins;
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
@@ -29,8 +37,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
+        // Split comma-separated origins from environment variable
+        String[] origins = allowedOrigins.split(",");
+        
         registry.addEndpoint("/ws/chess")
-                .setAllowedOrigins("http://localhost:5173", "http://localhost:3000")
+                .setAllowedOrigins(origins) // Production-safe: configurable via CORS_ALLOWED_ORIGINS env var
                 .withSockJS();
     }
 
