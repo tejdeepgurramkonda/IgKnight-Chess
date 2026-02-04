@@ -1,90 +1,149 @@
-# IgKnight Chess - Full-Stack Chess Application
+# IgKnight Chess
 
-A modern, full-stack multiplayer chess application with real-time gameplay, matchmaking, chat, and OAuth2 authentication.
+A full-stack online multiplayer chess platform featuring real-time gameplay, intelligent matchmaking, and modern authentication. The application demonstrates microservices architecture, real-time communication protocols, and secure user management.
 
-## 🎯 Features
+## Overview
 
-- **Real-time Multiplayer Chess** - Play chess with opponents in real-time using WebSocket
-- **Smart Matchmaking** - ELO-based matchmaking system
-- **Live Chat** - In-game chat using STOMP protocol
-- **OAuth2 Authentication** - Google OAuth2 login support
-- **User Profiles** - Track your stats, ELO rating, and game history
-- **Move Validation** - Complete chess rules validation including castling, en passant, and check/checkmate
-- **Responsive UI** - Modern React-based frontend with TypeScript
+IgKnight Chess is an online chess application that enables players to compete against each other in real-time. The system handles user authentication, game state management, player matchmaking, and live game synchronization. Built with enterprise-grade technologies, the application showcases best practices in distributed systems, security, and user experience design.
 
-## 🏗️ Architecture
+## Core Features
 
-### Backend - Microservices Architecture
-- **API Gateway** (Port 8083) - Entry point for all requests
-- **Auth Service** (Port 8084) - JWT & OAuth2 authentication
-- **Game Service** (Port 8082) - Chess game logic and move validation
-- **User Profile Service** (Port 8085) - User data and statistics
-- **Matchmaking Service** (Port 8086) - ELO-based matchmaking
-- **Realtime Game Service** (Port 8087) - WebSocket for real-time gameplay
+### Game Functionality
+- Real-time multiplayer chess with WebSocket-based synchronization
+- Server-side chess engine with complete rules validation (castling, en passant, promotion, check/checkmate)
+- Multiple time controls: Bullet (1 min), Blitz (3/5 min), Rapid (10/15 min)
+- In-game chat system using STOMP messaging protocol
+- Complete game history and move logging
+
+### User Management
+- JWT-based authentication with 24-hour token expiration
+- Google OAuth2 integration for third-party authentication
+- User profiles with statistics (wins, losses, draws, ELO rating)
+- Session persistence with automatic token management
+
+### Matchmaking System
+- ELO-based rating system for skill assessment
+- Queue-based matchmaking by rating and time control preference
+- Support for both rated and casual games
+- Automatic opponent pairing
+
+## System Architecture
+
+The application follows a microservices architecture pattern with six independent services, each handling specific business capabilities:
+
+| Service | Port | Responsibility |
+|---------|------|----------------|
+| API Gateway | 8083 | Request routing, authentication validation, CORS configuration |
+| Auth Service | 8084 | User registration, login, OAuth2 integration, JWT issuance |
+| Game Service | 8082 | Chess logic, move validation, game state management |
+| User Profile Service | 8085 | User data, statistics, ELO ratings |
+| Matchmaking Service | 8086 | Player queue management, opponent matching |
+| Realtime Game Service | 8087 | WebSocket server, live game updates, chat |
+
+### Architecture Highlights
+- **Backend-Driven Logic**: All chess rules and validations executed server-side
+- **Stateless Authentication**: JWT tokens enable horizontal scaling
+- **Event-Driven Communication**: WebSocket/STOMP for real-time synchronization
+- **Service Independence**: Each microservice can be deployed and scaled independently
+
+## Technology Stack
+
+### Backend
+- **Framework**: Spring Boot 3.5.10
+- **Gateway**: Spring Cloud Gateway (Reactive WebFlux)
+- **Security**: Spring Security with OAuth2 Client
+- **Database**: Microsoft SQL Server with JPA/Hibernate
+- **Authentication**: JJWT 0.11.5, BCrypt password hashing
+- **Real-time**: Spring WebSocket with STOMP protocol
+- **Build Tool**: Maven 3.6+
 
 ### Frontend
-- **React + TypeScript + Vite** (Port 5173)
-- Modern UI with Tailwind CSS
-- Real-time updates via WebSocket/STOMP
+- **Framework**: React 18.3 with TypeScript 5.6
+- **Build Tool**: Vite 6.0
+- **UI Library**: Radix UI components with Tailwind CSS 3.4
+- **HTTP Client**: Axios with automatic JWT injection
+- **Real-time**: Native WebSocket API with @stomp/stompjs 7.3
+- **Routing**: React Router 6.29
 
-## 📋 Prerequisites
+### Infrastructure
+- **Java**: Version 21
+- **Node.js**: Version 18+
+- **Database**: SQL Server 2019+ (3 separate databases for service isolation)
 
-- **Java** 17 or higher
-- **Node.js** 18 or higher
-- **Maven** 3.6+
-- **SQL Server** (local or remote)
-- **Git**
+## Project Structure
 
-## 🚀 Quick Start
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/tejdeepgurramkonda/IgKnight-Chess.git
-cd IgKnight-Chess
+```
+IgKnight Chess/
+├── IgKnightBackendMicroservices/
+│   ├── api-gateway/              # Spring Cloud Gateway (Port 8083)
+│   ├── auth-service/             # Authentication service (Port 8084)
+│   ├── game-service/             # Chess engine (Port 8082)
+│   ├── user-profile-service/     # User management (Port 8085)
+│   ├── matchmaking-service/      # Matchmaking logic (Port 8086)
+│   └── realtime-game-service/    # WebSocket server (Port 8087)
+│
+├── IgKnightFrontend/
+│   ├── src/
+│   │   ├── app/                  # React components and pages
+│   │   ├── services/             # API clients and WebSocket handlers
+│   │   ├── types/                # TypeScript type definitions
+│   │   └── config/               # Environment configuration
+│   └── public/                   # Static assets
+│
+└── Documentation/
+    ├── API_CONTRACT_SPECIFICATION.md
+    ├── BACKEND_DRIVEN_ARCHITECTURE_IMPLEMENTATION.md
+    └── FINAL_PRE_PRODUCTION_AUDIT_REPORT.md
 ```
 
-### 2. Database Setup
+## Setup Instructions
 
-Create the following databases in SQL Server:
-- `IgKnightauthservicedb`
-- `IgKnightgameservicedb`
-- `IgKnightuserservicedb`
+### Prerequisites
+- Java 21
+- Node.js 18+
+- Maven 3.6+ (or use included Maven wrapper)
+- SQL Server 2019+
+- Git
 
-### 3. Backend Configuration
+### Database Configuration
 
-#### Set Environment Variables
+Create three databases in SQL Server:
+```sql
+CREATE DATABASE IgKnightauthservicedb;
+CREATE DATABASE IgKnightgameservicedb;
+CREATE DATABASE IgKnightuserservicedb;
+```
 
-Create a `.env` file in `IgKnightBackendMicroservices/` directory (use `.env.example` as template):
+### Environment Configuration
+
+Create a `.env` file in `IgKnightBackendMicroservices/` directory:
 
 ```properties
 # Database Configuration
-DB_URL=jdbc:sqlserver://localhost:1433;databaseName=YOUR_DATABASE_NAME;encrypt=true;trustServerCertificate=true
-DB_USERNAME=your_database_username
-DB_PASSWORD=your_database_password
+DB_URL=jdbc:sqlserver://localhost:1433;encrypt=true;trustServerCertificate=true
+DB_USERNAME=your_sql_server_username
+DB_PASSWORD=your_sql_server_password
 
 # JWT Configuration
-JWT_SECRET=your_jwt_secret_key_minimum_256_bits
+JWT_SECRET=your-256-bit-secret-key
 JWT_EXPIRATION=86400000
 
-# Google OAuth2 Configuration
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
+# Google OAuth2
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
 ```
 
-#### Configure Google OAuth2
+**Google OAuth2 Setup:**
+1. Create OAuth credentials at [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Add redirect URI: `http://localhost:8083/api/auth/login/oauth2/code/google`
+3. Update `.env` with client ID and secret
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create OAuth 2.0 credentials
-3. Add authorized redirect URI: `http://localhost:8083/api/auth/login/oauth2/code/google`
-4. Update `.env` with your credentials
+### Running the Application
 
-#### Start Backend Services
-
+**Backend Services** (start each in a separate terminal):
 ```bash
 cd IgKnightBackendMicroservices
 
-# Start each service in separate terminals:
 cd api-gateway && mvn spring-boot:run
 cd auth-service && mvn spring-boot:run
 cd game-service && mvn spring-boot:run
@@ -93,254 +152,149 @@ cd matchmaking-service && mvn spring-boot:run
 cd realtime-game-service && mvn spring-boot:run
 ```
 
-### 4. Frontend Setup
-
+**Frontend**:
 ```bash
 cd IgKnightFrontend
 npm install
 npm run dev
 ```
 
-Access the application at: **http://localhost:5173**
+Access the application at `http://localhost:5173`
 
-## 📡 API Endpoints
+## API Overview
 
-### Authentication Service (via API Gateway: http://localhost:8083)
+### Authentication Endpoints
 
-#### Sign Up
+**Sign Up**
 ```http
 POST /api/auth/signup
 Content-Type: application/json
 
 {
-  "username": "string",
-  "email": "string",
-  "password": "string"
+  "username": "player1",
+  "email": "player1@example.com",
+  "password": "password123"
 }
 ```
 
-#### Sign In
+**Sign In**
 ```http
 POST /api/auth/signin
 Content-Type: application/json
 
 {
-  "username": "string",
-  "password": "string"
+  "username": "player1",
+  "password": "password123"
 }
 
 Response:
 {
-  "token": "string",
-  "userId": "number",
-  "username": "string"
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "userId": 1,
+  "username": "player1"
 }
 ```
 
-#### Google OAuth2 Login
+**Google OAuth**
 ```http
 GET /api/auth/oauth2/authorization/google
 ```
 
-### User Profile Service
+### Game Endpoints
 
-#### Get User Profile
+**Create Game**
 ```http
-GET /api/users/{userId}
-Authorization: Bearer {token}
-
-Response:
-{
-  "userId": "number",
-  "username": "string",
-  "email": "string",
-  "eloRating": "number",
-  "wins": "number",
-  "losses": "number",
-  "draws": "number"
-}
-```
-
-#### Update User Profile
-```http
-PUT /api/users/{userId}
+POST /api/chess/games/create
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "email": "string"
+  "timeControl": "BLITZ_5",
+  "isRated": true
 }
 ```
 
-### Game Service
-
-#### Create New Game
+**Get Legal Moves**
 ```http
-POST /api/games
+GET /api/chess/games/{gameId}/legal-moves/{square}
+Authorization: Bearer {token}
+```
+
+**Make Move**
+```http
+POST /api/chess/games/{gameId}/moves
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "whitePlayerId": "number",
-  "blackPlayerId": "number"
+  "from": "e2",
+  "to": "e4"
 }
 ```
 
-#### Get Game by ID
-```http
-GET /api/games/{gameId}
-Authorization: Bearer {token}
-```
+### Matchmaking Endpoints
 
-#### Make a Move
+**Join Queue**
 ```http
-POST /api/games/{gameId}/move
+POST /matchmaking/queue/join
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "playerId": "number",
-  "fromSquare": "string",  // e.g., "e2"
-  "toSquare": "string",     // e.g., "e4"
-  "promotionPiece": "string" // optional, e.g., "QUEEN"
+  "timeControl": "BLITZ_5",
+  "isRated": true
 }
 ```
 
-#### Get Game History
-```http
-GET /api/games/user/{userId}/history
-Authorization: Bearer {token}
-```
+### WebSocket Communication
 
-### Matchmaking Service
+**Connection**: `ws://localhost:8087/ws`
 
-#### Join Matchmaking Queue
-```http
-POST /api/matchmaking/join
-Authorization: Bearer {token}
-Content-Type: application/json
+**Subscribe to game updates**: `/topic/game/{gameId}`
 
-{
-  "userId": "number"
-}
-```
+**Subscribe to chat**: `/topic/game/{gameId}/chat`
 
-#### Leave Queue
-```http
-POST /api/matchmaking/leave
-Authorization: Bearer {token}
-Content-Type: application/json
+**Send chat message**: `/app/chat.send/{gameId}`
 
-{
-  "userId": "number"
-}
-```
+## Security Implementation
 
-### Real-time Game Service
+- **Authentication**: JWT tokens with 24-hour expiration, BCrypt password hashing
+- **Authorization**: API Gateway validates all requests, injects user context headers
+- **OAuth2**: Google authentication via Spring Security OAuth2 Client
+- **CORS**: Configured for cross-origin requests
+- **Data Protection**: Parameterized queries via JPA to prevent SQL injection
+- **Secret Management**: Environment variables for sensitive configuration
 
-#### WebSocket Connection
-```
-ws://localhost:8087/ws
-```
+## Key Technical Decisions
 
-#### Subscribe to Game Updates
-```
-STOMP Subscribe: /topic/game/{gameId}
-```
+### Backend-Driven Chess Engine
+All chess logic resides in the backend Game Service. The frontend only displays game state and sends move requests. This approach:
+- Prevents client-side manipulation and cheating
+- Ensures consistent rule enforcement
+- Simplifies frontend complexity
+- Centralizes business logic for easier maintenance
 
-#### Subscribe to Chat
-```
-STOMP Subscribe: /topic/game/{gameId}/chat
-```
+### Microservices Architecture
+Each service handles a specific domain with clear boundaries:
+- Enables independent development and deployment
+- Allows technology-specific optimizations (reactive gateway, traditional services)
+- Facilitates horizontal scaling based on service load
+- Isolates failures to specific components
 
-#### Send Chat Message
-```
-STOMP Send: /app/chat.send/{gameId}
-Body: {
-  "senderId": "number",
-  "senderName": "string",
-  "content": "string"
-}
-```
+### Real-time Communication
+WebSocket with STOMP protocol for game synchronization:
+- Bidirectional communication for instant updates
+- Message routing via topic subscriptions
+- Lower latency than HTTP polling
+- Efficient resource usage
 
-## 🎮 How to Use the App
 
-1. **Sign Up/Login**
-   - Create account or use Google OAuth2
-   - Receive JWT token for authentication
-
-2. **Find a Match**
-   - Click "Find Match" to join matchmaking queue
-   - Get matched with opponent based on ELO rating
-
-3. **Play Chess**
-   - Drag and drop pieces to make moves
-   - All chess rules are validated server-side
-   - Real-time board updates via WebSocket
-
-4. **Chat with Opponent**
-   - Use in-game chat during matches
-   - Messages are delivered in real-time
-
-5. **View Stats**
-   - Check your profile for wins/losses/draws
-   - Track your ELO rating progression
-
-## 🔐 Security Features
-
-- JWT-based authentication
-- Password encryption with BCrypt
-- OAuth2 integration with Google
-- CORS protection
-- Environment-based sensitive data management
-- SQL injection prevention via JPA
-
-## 🛠️ Technology Stack
-
-### Backend
-- Spring Boot 3.x
-- Spring Cloud Gateway
-- Spring Security + OAuth2
-- Spring Data JPA
-- WebSocket/STOMP
-- SQL Server
-- JWT (JJWT)
-
-### Frontend
-- React 18
-- TypeScript
-- Vite
-- Tailwind CSS
-- Axios
-- STOMP.js
-- Chess.js
-
-## 📝 Development Notes
-
-- Backend services use reactive programming where applicable
-- All services are independently scalable
-- Database migrations handled by JPA/Hibernate
-- Frontend uses modern React hooks and context API
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
-## 👤 Author
+## Development Team
 
 **Tejdeep Gurramkonda**
 - GitHub: [@tejdeepgurramkonda](https://github.com/tejdeepgurramkonda)
+- Project Repository: [IgKnight Chess](https://github.com/tejdeepgurramkonda/IgKnight-Chess)
 
-## 🙏 Acknowledgments
+## License
 
-- Chess.js for chess logic
-- Spring Framework team
-- React community
+This project is licensed under the MIT License - see the LICENSE file for details.
